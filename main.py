@@ -1,7 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from pydantic import BaseModel
 from app.bigram_model import BigramModel
 from app.embedding_model import EmbeddingModel
+
+from PIL import Image
+import torch
+import torchvision.transforms as transforms
+
+from helper_lib.model import get_model
+
 
 app = FastAPI()
 
@@ -14,6 +21,34 @@ corpus = [
 
 bigram_model = BigramModel(corpus)
 embedding_model = EmbeddingModel()
+
+CLASSES = [
+    "airplane",
+    "automobile",
+    "bird",
+    "cat",
+    "deer",
+    "dog",
+    "frog",
+    "horse",
+    "ship",
+    "truck"
+]
+
+classifier = get_model("EnhancedCNN")
+
+checkpoint = torch.load(
+    "checkpoints/model_epoch_009.pth",
+    map_location="cpu"
+)
+
+classifier.load_state_dict(checkpoint["model_state_dict"])
+classifier.eval()
+
+image_transform = transforms.Compose([
+    transforms.Resize((32, 32)),
+    transforms.ToTensor()
+])
 
 
 class TextGenerationRequest(BaseModel):
@@ -46,4 +81,20 @@ def get_embedding(request: EmbeddingRequest):
     return {
         "word": request.word,
         "embedding": embedding
+    }
+
+
+@app.post("/predict")
+async def predict_image(file: UploadFile = File(...)):
+    image = Image.open(file.file).convert("RGB")
+    image = image_transform(image).unsqueeze(0)
+
+    with torch.no_grad():
+        outputs = classifier(image)
+        probabilities = torch.softmax(outputs, dim=1)
+        confidence, predicted_class = torch.max(probabilities, 1)
+
+    return {
+        "predicted_class": CLASSES[predicted_class.item()],
+        "confidence": round(confidence.item(), 4)
     }
